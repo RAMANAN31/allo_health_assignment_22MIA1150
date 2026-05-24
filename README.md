@@ -4,7 +4,7 @@ OmniStock is a production-grade, highly concurrent inventory reservation and che
 
 ---
 
-## 🚀 Key Architectural Highlights
+##  Key Architectural Highlights
 
 ### 1. Concurrency Control (Atomic Row Locking)
 To satisfy the critical requirement of concurrency safety (exactly one buyer secures the last available unit under overlapping checkout attempts while others receive a `409 Conflict`), OmniStock employs **PostgreSQL Row-Level Locking (`SELECT ... FOR UPDATE`)**.
@@ -40,7 +40,7 @@ To prevent double charging and duplicate reservations:
 
 ---
 
-## 📁 Folder Structure
+##  Folder Structure
 
 ```
 ├── prisma/
@@ -69,7 +69,7 @@ To prevent double charging and duplicate reservations:
 
 ---
 
-## 💻 Local Setup & Installation
+##  Local Setup & Installation
 
 ### 1. Clone the project and install dependencies
 ```bash
@@ -100,7 +100,7 @@ Open [http://localhost:3000](http://localhost:3000) to view the real-time holdin
 
 ---
 
-## 🧪 Validating Concurrency & Race Conditions
+##  Validating Concurrency & Race Conditions
 
 OmniStock supports **two methods** for testing transaction safety under high concurrency:
 
