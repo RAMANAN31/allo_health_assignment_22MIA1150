@@ -940,6 +940,163 @@ export default function Dashboard() {
         </div>
       </main>
 
+      {/* Real-time DB State and Audit Logs */}
+      <section className="px-6 md:px-12 pb-16 space-y-8 select-none">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          
+          {/* Column 1: Live Database Inventory Grid (Sample Data Viewer) */}
+          <div className="bg-card border border-border p-6 rounded-2xl shadow-sm space-y-4">
+            <div>
+              <div className="flex items-center gap-2 text-indigo-500">
+                <Database className="w-5 h-5 shrink-0" />
+                <h3 className="font-bold text-md uppercase tracking-wider">Raw Database Inventory Table (Sample Data)</h3>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Direct tabular view of PostgreSQL Inventory records showing current holds</p>
+            </div>
+
+            <div className="overflow-x-auto border border-border rounded-xl">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-900 border-b border-border text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="p-3">Product Name</th>
+                    <th className="p-3">SKU</th>
+                    <th className="p-3">Warehouse Hub</th>
+                    <th className="p-3 text-center">Total Stock</th>
+                    <th className="p-3 text-center">Reserved Holds</th>
+                    <th className="p-3 text-center">Available Stock</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border font-mono">
+                  {productsLoading ? (
+                    <tr>
+                      <td colSpan={6} className="p-4 text-center text-muted-foreground">Loading direct database grid records...</td>
+                    </tr>
+                  ) : filteredProducts.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-4 text-center text-muted-foreground">No database records found. Click 'Seed Catalog' to baseline.</td>
+                    </tr>
+                  ) : (
+                    filteredProducts.flatMap(product => 
+                      product.stockBreakdown.map(inv => {
+                        const isLow = inv.availableUnits <= 2 && inv.availableUnits > 0;
+                        const isOut = inv.availableUnits === 0;
+                        
+                        return (
+                          <tr 
+                            key={`${product.id}-${inv.warehouseId}`}
+                            className={`hover:bg-slate-50/50 dark:hover:bg-slate-900/30 transition-colors ${
+                              isOut 
+                                ? 'bg-rose-500/5 text-rose-500 dark:text-rose-400' 
+                                : isLow 
+                                ? 'bg-amber-500/5 text-amber-500 dark:text-amber-400' 
+                                : ''
+                            }`}
+                          >
+                            <td className="p-3 font-sans font-semibold text-slate-900 dark:text-white">{product.name}</td>
+                            <td className="p-3 text-slate-500 font-medium text-[11px]">{product.sku}</td>
+                            <td className="p-3 font-sans font-medium text-slate-700 dark:text-slate-300">{inv.warehouseName}</td>
+                            <td className="p-3 text-center font-bold">{inv.totalUnits}</td>
+                            <td className="p-3 text-center font-bold text-amber-500">{inv.reservedUnits}</td>
+                            <td className={`p-3 text-center font-extrabold ${
+                              isOut ? 'text-rose-500' : isLow ? 'text-amber-500' : 'text-emerald-500'
+                            }`}>{inv.availableUnits}</td>
+                          </tr>
+                        );
+                      })
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-muted-foreground">
+              <span>SQL: SELECT * FROM "Inventory" JOIN "Product" JOIN "Warehouse"</span>
+              <span className="font-semibold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-900">Computed on Read</span>
+            </div>
+          </div>
+
+          {/* Column 2: System Updation & Deletion Audit Trail (Live SQL Logs) */}
+          <div className="bg-card border border-border p-6 rounded-2xl shadow-sm space-y-4">
+            <div>
+              <div className="flex items-center gap-2 text-indigo-500">
+                <Layers className="w-5 h-5 shrink-0" />
+                <h3 className="font-bold text-md uppercase tracking-wider">Database Event Ledger (Updates & Deletions)</h3>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Real-time trace of SQL writes, row-lock bookings, and dynamic stock mutations</p>
+            </div>
+
+            <div className="border border-border rounded-xl max-h-[315px] overflow-y-auto divide-y divide-border bg-slate-50/50 dark:bg-slate-900/10">
+              {!reservationsData || reservationsData.reservations.length === 0 ? (
+                <div className="p-12 text-center text-xs text-muted-foreground space-y-1">
+                  <Timer className="w-6 h-6 mx-auto opacity-40 mb-1" />
+                  <p className="font-medium">Audit ledger is empty.</p>
+                  <p>Book a hold, trigger an expiry, or confirm a purchase to view PostgreSQL logs.</p>
+                </div>
+              ) : (
+                reservationsData.reservations.map((hold) => (
+                  <div key={hold.id} className="p-3 text-xs space-y-1.5 hover:bg-slate-100/30 dark:hover:bg-slate-900/30 transition-colors">
+                    <div className="flex justify-between items-center">
+                      <span className="font-mono text-[9px] text-slate-400">HOLD ID: {hold.id.substring(0, 12)}...</span>
+                      <span className="font-mono text-[9px] text-slate-400">{new Date(hold.createdAt).toLocaleTimeString()}</span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 items-center">
+                      {hold.status === 'PENDING' && (
+                        <>
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 text-blue-500 font-mono">
+                            SQL: [INSERT & UPDATE]
+                          </span>
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300">
+                            Hold created. **Incremented** reservedUnits by <code className="font-mono bg-muted px-1 rounded font-bold text-amber-500">{hold.quantity}</code> on Inventory; inserted PENDING Hold row.
+                          </p>
+                        </>
+                      )}
+
+                      {hold.status === 'CONFIRMED' && (
+                        <>
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 font-mono">
+                            SQL: [UPDATE & DEDUCT]
+                          </span>
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300">
+                            Payment verified. **Deducted** totalUnits by <code className="font-mono bg-muted px-1 rounded font-bold text-rose-500">{hold.quantity}</code>, **decremented** reservedUnits by <code className="font-mono bg-muted px-1 rounded font-bold text-amber-500">{hold.quantity}</code>; set status CONFIRMED.
+                          </p>
+                        </>
+                      )}
+
+                      {hold.status === 'RELEASED' && (
+                        <>
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-500/10 border border-slate-500/20 text-slate-400 font-mono">
+                            SQL: [UPDATE & RESTORE]
+                          </span>
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300">
+                            Hold cancelled early. **Decremented** reservedUnits by <code className="font-mono bg-muted px-1 rounded font-bold text-emerald-500">{hold.quantity}</code> on Inventory; set status RELEASED.
+                          </p>
+                        </>
+                      )}
+
+                      {hold.status === 'EXPIRED' && (
+                        <>
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-500 font-mono">
+                            SQL: [UPDATE & RESTORE]
+                          </span>
+                          <p className="text-[11px] text-slate-700 dark:text-slate-300">
+                            Hold timeout reached. **Decremented** reservedUnits by <code className="font-mono bg-muted px-1 rounded font-bold text-emerald-500">{hold.quantity}</code> on Inventory (restoring available stock); set status EXPIRED.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-muted-foreground pt-1">
+              <span>SQL: UPDATE "Inventory" SET reserved_units = reserved_units - X</span>
+              <span className="font-semibold px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-900">Reactive Timeline</span>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
       {/* Reservation Dialog Modal Backdrop */}
       {isCreateModalOpen && selectedProduct && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 select-none">
