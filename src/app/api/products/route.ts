@@ -1,21 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { lazyCleanupExpiredReservations } from '@/lib/reservation-service';
-import type { Inventory, Warehouse } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
-
-type InventoryWithWarehouse = Inventory & { warehouse: Warehouse };
-
-type ProductWithInventory = {
-  id: string;
-  name: string;
-  sku: string;
-  description: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  inventory: InventoryWithWarehouse[];
-};
 
 export async function GET() {
   try {
@@ -37,11 +24,11 @@ export async function GET() {
     });
 
     // 3. Format the response to calculate dynamic stats
-    const formattedProducts = (products as ProductWithInventory[]).map((product: ProductWithInventory) => {
+    const formattedProducts = products.map((product) => {
       let totalStock = 0;
       let totalReserved = 0;
 
-      const stockBreakdown = product.inventory.map((inv: InventoryWithWarehouse) => {
+      const stockBreakdown = product.inventory.map((inv) => {
         const available = inv.totalUnits - inv.reservedUnits;
         totalStock += inv.totalUnits;
         totalReserved += inv.reservedUnits;
@@ -52,7 +39,7 @@ export async function GET() {
           location: inv.warehouse.location,
           totalUnits: inv.totalUnits,
           reservedUnits: inv.reservedUnits,
-          availableUnits: Math.max(0, available), // Guarantee no negative stock figures
+          availableUnits: Math.max(0, available),
         };
       });
 
