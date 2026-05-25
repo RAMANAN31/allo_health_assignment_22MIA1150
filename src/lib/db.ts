@@ -1,22 +1,24 @@
 import { PrismaClient } from '../generated/prisma';
-import { PrismaPg } from '@prisma/adapter-pg';
-import pg from 'pg';
+import { PrismaNeon } from '@prisma/adapter-neon';
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
-// Initialize PostgreSQL driver connection pool dynamically
-// pg.Pool holds connections lazily, so it will compile successfully during Next.js page generation
-const connectionString = process.env.DATABASE_URL || 'postgresql://localhost:5432/postgres';
-const pool = new pg.Pool({ connectionString });
-const adapter = new PrismaPg(pool);
+function createPrismaClient() {
+  // PrismaNeon takes a PoolConfig object (connectionString as string).
+  // It internally creates a @neondatabase/serverless Pool using WebSocket transport,
+  // which works on Vercel Serverless Functions without native TCP sockets.
+  // Fully compatible with Supabase via the pooler endpoint (port 6543).
+  const adapter = new PrismaNeon({ connectionString: process.env.DATABASE_URL! });
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+  return new PrismaClient({
     adapter,
     log: process.env.NODE_ENV === 'development' ? ['error', 'warn'] : ['error'],
   });
+}
+
+export const prisma =
+  globalForPrisma.prisma ?? createPrismaClient();
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
