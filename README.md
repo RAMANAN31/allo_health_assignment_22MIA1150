@@ -96,7 +96,7 @@ npx prisma migrate dev --name init
 ```bash
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000) to view the real-time holding dashboard!
+Open [https://allo-health-assignment-22mia1150.onrender.com](https://allo-health-assignment-22mia1150.onrender.com) to view the real-time holding dashboard!
 
 ---
 
