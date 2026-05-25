@@ -1,4 +1,4 @@
-import { PrismaClient } from '../generated/prisma';
+import { PrismaClient } from '@prisma/client';
 import { PrismaNeon } from '@prisma/adapter-neon';
 
 const globalForPrisma = globalThis as unknown as {
@@ -6,10 +6,9 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 function createPrismaClient() {
-  // PrismaNeon takes a PoolConfig object (connectionString as string).
-  // It internally creates a @neondatabase/serverless Pool using WebSocket transport,
-  // which works on Vercel Serverless Functions without native TCP sockets.
-  // Fully compatible with Supabase via the pooler endpoint (port 6543).
+  // PrismaNeon uses @neondatabase/serverless Pool with WebSocket transport.
+  // Works on Vercel Serverless Functions — no native TCP sockets needed.
+  // Fully compatible with Supabase PostgreSQL via the pooler endpoint (port 6543).
   const adapter = new PrismaNeon({ connectionString: process.env.DATABASE_URL! });
 
   return new PrismaClient({
@@ -18,7 +17,6 @@ function createPrismaClient() {
   });
 }
 
-export const prisma =
-  globalForPrisma.prisma ?? createPrismaClient();
+export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
