@@ -1,100 +1,128 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { pool } from '@/lib/db';
+import crypto from 'crypto';
 
 export async function POST() {
   try {
     console.log('[API Seed] Clearing database tables...');
     
     // Clean in correct dependency order
-    await prisma.idempotencyRecord.deleteMany();
-    await prisma.reservation.deleteMany();
-    await prisma.inventory.deleteMany();
-    await prisma.warehouse.deleteMany();
-    await prisma.product.deleteMany();
+    await pool.query('DELETE FROM "IdempotencyRecord"');
+    await pool.query('DELETE FROM "Reservation"');
+    await pool.query('DELETE FROM "Inventory"');
+    await pool.query('DELETE FROM "Warehouse"');
+    await pool.query('DELETE FROM "Product"');
 
     console.log('[API Seed] Seeding Products...');
-    const product1 = await prisma.product.create({
-      data: {
-        name: 'Vortex Pro Wireless Headphones',
-        sku: 'VORTEX-PRO-001',
-        description: 'Noise-cancelling high-fidelity wireless over-ear headphones with 40-hour battery life.',
-      },
-    });
+    const p1Id = crypto.randomUUID();
+    const p2Id = crypto.randomUUID();
+    const p3Id = crypto.randomUUID();
+    const now = new Date();
 
-    const product2 = await prisma.product.create({
-      data: {
-        name: 'Apex Mechanical Keyboard',
-        sku: 'APEX-MECH-002',
-        description: 'Hot-swappable mechanical keyboard with custom linear switches and RGB backlighting.',
-      },
-    });
+    await pool.query(
+      'INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $5)',
+      [
+        p1Id,
+        'Vortex Pro Wireless Headphones',
+        'VORTEX-PRO-001',
+        'Noise-cancelling high-fidelity wireless over-ear headphones with 40-hour battery life.',
+        now
+      ]
+    );
 
-    const product3 = await prisma.product.create({
-      data: {
-        name: 'Aero Ergonomic Office Chair',
-        sku: 'AERO-CHAIR-003',
-        description: 'Premium mesh ergonomic chair with 3D armrests and lumbar support.',
-      },
-    });
+    await pool.query(
+      'INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $5)',
+      [
+        p2Id,
+        'Apex Mechanical Keyboard',
+        'APEX-MECH-002',
+        'Hot-swappable mechanical keyboard with custom linear switches and RGB backlighting.',
+        now
+      ]
+    );
+
+    await pool.query(
+      'INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $5)',
+      [
+        p3Id,
+        'Aero Ergonomic Office Chair',
+        'AERO-CHAIR-003',
+        'Premium mesh ergonomic chair with 3D armrests and lumbar support.',
+        now
+      ]
+    );
 
     console.log('[API Seed] Seeding Warehouses...');
-    const warehouseEast = await prisma.warehouse.create({
-      data: {
-        name: 'East Coast Fulfillment Center',
-        location: 'New York, NY',
-      },
-    });
+    const wEastId = crypto.randomUUID();
+    const wWestId = crypto.randomUUID();
+    const wCentralId = crypto.randomUUID();
 
-    const warehouseWest = await prisma.warehouse.create({
-      data: {
-        name: 'West Coast Logistics Hub',
-        location: 'Los Angeles, CA',
-      },
-    });
+    await pool.query(
+      'INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $4)',
+      [wEastId, 'East Coast Fulfillment Center', 'New York, NY', now]
+    );
 
-    const warehouseCentral = await prisma.warehouse.create({
-      data: {
-        name: 'Midwest Distribution Center',
-        location: 'Chicago, IL',
-      },
-    });
+    await pool.query(
+      'INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $4)',
+      [wWestId, 'West Coast Logistics Hub', 'Los Angeles, CA', now]
+    );
+
+    await pool.query(
+      'INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $4)',
+      [wCentralId, 'Midwest Distribution Center', 'Chicago, IL', now]
+    );
 
     console.log('[API Seed] Seeding Inventory Stock breakdowns...');
     // Vortex Headphones:
     // East: 15 units
     // West: 8 units
     // Central: 0 units (out of stock)
-    await prisma.inventory.createMany({
-      data: [
-        { productId: product1.id, warehouseId: warehouseEast.id, totalUnits: 15, reservedUnits: 0 },
-        { productId: product1.id, warehouseId: warehouseWest.id, totalUnits: 8, reservedUnits: 0 },
-        { productId: product1.id, warehouseId: warehouseCentral.id, totalUnits: 0, reservedUnits: 0 },
-      ],
-    });
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p1Id, wEastId, 15, 0, now]
+    );
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p1Id, wWestId, 8, 0, now]
+    );
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p1Id, wCentralId, 0, 0, now]
+    );
 
     // Apex Keyboard:
     // East: 5 units
     // West: 12 units
     // Central: 20 units
-    await prisma.inventory.createMany({
-      data: [
-        { productId: product2.id, warehouseId: warehouseEast.id, totalUnits: 5, reservedUnits: 0 },
-        { productId: product2.id, warehouseId: warehouseWest.id, totalUnits: 12, reservedUnits: 0 },
-        { productId: product2.id, warehouseId: warehouseCentral.id, totalUnits: 20, reservedUnits: 0 },
-      ],
-    });
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p2Id, wEastId, 5, 0, now]
+    );
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p2Id, wWestId, 12, 0, now]
+    );
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p2Id, wCentralId, 20, 0, now]
+    );
 
     // Aero Chair:
     // East: 2 units (low stock!)
     // West: 0 units
     // Central: 1 units
-    await prisma.inventory.createMany({
-      data: [
-        { productId: product3.id, warehouseId: warehouseEast.id, totalUnits: 2, reservedUnits: 0 },
-        { productId: product3.id, warehouseId: warehouseWest.id, totalUnits: 0, reservedUnits: 0 },
-        { productId: product3.id, warehouseId: warehouseCentral.id, totalUnits: 1, reservedUnits: 0 },
-      ],
-    });
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p3Id, wEastId, 2, 0, now]
+    );
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p3Id, wWestId, 0, 0, now]
+    );
+    await pool.query(
+      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
+      [crypto.randomUUID(), p3Id, wCentralId, 1, 0, now]
+    );
 
     console.log('[API Seed] Database seeding completed successfully!');
     return NextResponse.json({ success: true, message: 'Database successfully seeded.' }, { status: 201 });

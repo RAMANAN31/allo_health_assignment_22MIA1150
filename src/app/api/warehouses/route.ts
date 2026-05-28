@@ -1,15 +1,12 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { pool } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const warehouses = await prisma.warehouse.findMany({
-      orderBy: {
-        name: 'asc',
-      },
-    });
+    const result = await pool.query('SELECT * FROM "Warehouse" ORDER BY name ASC');
+    const warehouses = result.rows;
 
     return NextResponse.json({ warehouses }, { status: 200 });
   } catch (error) {

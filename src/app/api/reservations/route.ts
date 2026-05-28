@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { prisma } from '@/lib/db';
+import { pool } from '@/lib/db';
 import { createReservation, lazyCleanupExpiredReservations } from '@/lib/reservation-service';
 
 export const dynamic = 'force-dynamic';
@@ -10,17 +10,29 @@ export async function GET() {
     // 1. Run lazy cleanup before returning reservations
     await lazyCleanupExpiredReservations();
 
-    // 2. Fetch the 50 most recent reservations
-    const reservations = await prisma.reservation.findMany({
-      include: {
-        product: true,
-        warehouse: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: 50,
-    });
+    // 2. Fetch the 50 most recent reservations with nested product and warehouse details
+    const result = await pool.query(`
+      SELECT 
+        r.id,
+        r."productId",
+        r."warehouseId",
+        r.quantity,
+        r.status,
+        r."expiresAt",
+        r."createdAt",
+        r."confirmedAt",
+        r."releasedAt",
+        r."idempotencyKey",
+        json_build_object('name', p.name, 'sku', p.sku) as product,
+        json_build_object('name', w.name, 'location', w.location) as warehouse
+      FROM "Reservation" r
+      JOIN "Product" p ON r."productId" = p.id
+      JOIN "Warehouse" w ON r."warehouseId" = w.id
+      ORDER BY r."createdAt" DESC
+      LIMIT 50;
+    `);
+
+    const reservations = result.rows;
 
     return NextResponse.json({ reservations }, { status: 200 });
   } catch (error) {

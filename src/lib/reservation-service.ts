@@ -1,4 +1,5 @@
-import { prisma } from './db';
+import { pool } from './db';
+import crypto from 'crypto';
 
 /**
  * Lazy cleanup of expired reservations.
@@ -7,27 +8,28 @@ import { prisma } from './db';
 export async function lazyCleanupExpiredReservations() {
   const now = new Date();
 
-  const expiredReservations = await prisma.reservation.findMany({
-    where: { status: 'PENDING', expiresAt: { lt: now } },
-  });
+  const expired = await pool.query(
+    'SELECT * FROM "Reservation" WHERE status = \'PENDING\' AND "expiresAt" < $1',
+    [now]
+  );
 
-  if (expiredReservations.length === 0) return;
+  if (expired.rowCount === 0) return;
 
-  console.log(`[Lazy Cleanup] Found ${expiredReservations.length} expired reservations to clean up.`);
+  console.log(`[Lazy Cleanup] Found ${expired.rowCount} expired reservations to clean up.`);
 
-  for (const res of expiredReservations) {
+  for (const res of expired.rows) {
     try {
       // Atomic update: only proceed if still PENDING (guards against double-cleanup)
-      const updated = await prisma.reservation.updateMany({
-        where: { id: res.id, status: 'PENDING' },
-        data: { status: 'EXPIRED', releasedAt: now },
-      });
+      const updated = await pool.query(
+        'UPDATE "Reservation" SET status = \'EXPIRED\', "releasedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
+        [now, res.id]
+      );
 
-      if (updated.count > 0) {
-        await prisma.inventory.update({
-          where: { productId_warehouseId: { productId: res.productId, warehouseId: res.warehouseId } },
-          data: { reservedUnits: { decrement: res.quantity } },
-        });
+      if (updated.rowCount && updated.rowCount > 0) {
+        await pool.query(
+          'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
+          [res.quantity, res.productId, res.warehouseId]
+        );
         console.log(`[Lazy Cleanup] Expired reservation ${res.id}, restored ${res.quantity} units.`);
       }
     } catch (err) {
@@ -38,11 +40,11 @@ export async function lazyCleanupExpiredReservations() {
 
 /**
  * Creates a new inventory reservation.
- * Uses Prisma optimistic concurrency control:
+ * Uses optimistic concurrency control:
  * - We capture the current reservedUnits value.
  * - We attempt an atomic conditional UPDATE that only succeeds when
  *   reservedUnits + quantity <= totalUnits.
- * - If the row was already modified concurrently, updateMany returns count=0
+ * - If the row was already modified concurrently, rowCount is 0
  *   and we return 409 Conflict, perfectly mimicking SELECT FOR UPDATE semantics.
  */
 export async function createReservation(
@@ -56,14 +58,16 @@ export async function createReservation(
 
   // 1. Check Idempotency Key
   if (idempotencyKey) {
-    const existing = await prisma.idempotencyRecord.findUnique({
-      where: { key: idempotencyKey },
-    });
-    if (existing) {
-      if (now > existing.expiresAt) {
-        await prisma.idempotencyRecord.delete({ where: { key: idempotencyKey } });
+    const existing = await pool.query(
+      'SELECT * FROM "IdempotencyRecord" WHERE key = $1',
+      [idempotencyKey]
+    );
+    if (existing.rowCount && existing.rowCount > 0) {
+      const record = existing.rows[0];
+      if (now > new Date(record.expiresAt)) {
+        await pool.query('DELETE FROM "IdempotencyRecord" WHERE key = $1', [idempotencyKey]);
       } else {
-        return { response: JSON.parse(existing.responseBody), status: existing.statusCode };
+        return { response: JSON.parse(record.responseBody), status: record.statusCode };
       }
     }
   }
@@ -72,65 +76,55 @@ export async function createReservation(
   await lazyCleanupExpiredReservations();
 
   // 3. Read current inventory snapshot
-  const inventory = await prisma.inventory.findUnique({
-    where: { productId_warehouseId: { productId, warehouseId } },
-  });
+  const invRes = await pool.query(
+    'SELECT * FROM "Inventory" WHERE "productId" = $1 AND "warehouseId" = $2',
+    [productId, warehouseId]
+  );
 
-  if (!inventory) {
+  if (invRes.rowCount === 0) {
     return { response: { error: 'No inventory record found for the given product and warehouse.' }, status: 404 };
   }
 
+  const inventory = invRes.rows[0];
   const available = inventory.totalUnits - inventory.reservedUnits;
   if (available < quantity) {
     const resp = { error: 'Insufficient stock available in the selected warehouse.' };
     if (idempotencyKey) {
-      await prisma.idempotencyRecord.create({
-        data: {
-          key: idempotencyKey,
-          responseBody: JSON.stringify(resp),
-          statusCode: 409,
-          expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-        },
-      }).catch(() => {}); // ignore duplicate key race
+      await pool.query(
+        'INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING',
+        [idempotencyKey, JSON.stringify(resp), 409, new Date(now.getTime() + 24 * 60 * 60 * 1000), now]
+      ).catch(() => {}); // ignore duplicate key race
     }
     return { response: resp, status: 409 };
   }
 
   // 4. Atomic conditional update — only succeeds if stock hasn't changed
   // This is optimistic locking: we condition on the exact reservedUnits we read.
-  const updated = await prisma.inventory.updateMany({
-    where: {
-      productId,
-      warehouseId,
-      reservedUnits: inventory.reservedUnits, // CAS condition
-      // Double-check we still have enough headroom
-      totalUnits: { gte: inventory.reservedUnits + quantity },
-    },
-    data: { reservedUnits: { increment: quantity } },
-  });
+  const updated = await pool.query(
+    'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" + $1 WHERE "productId" = $2 AND "warehouseId" = $3 AND "reservedUnits" = $4 AND "totalUnits" >= "reservedUnits" + $1',
+    [quantity, productId, warehouseId, inventory.reservedUnits]
+  );
 
-  // 5. If count is 0, a concurrent request changed the row — conflict!
-  if (updated.count === 0) {
+  // 5. If rowCount is 0, a concurrent request changed the row — conflict!
+  if (!updated.rowCount || updated.rowCount === 0) {
     const resp = { error: 'Insufficient stock available in the selected warehouse.' };
     return { response: resp, status: 409 };
   }
 
-  // 6. Create the Reservation record
-  const reservation = await prisma.reservation.create({
-    data: { productId, warehouseId, quantity, status: 'PENDING', expiresAt, idempotencyKey },
-  });
+  // 6. Create the Reservation record using crypto.randomUUID()
+  const reservationId = crypto.randomUUID();
+  await pool.query(
+    'INSERT INTO "Reservation" (id, "productId", "warehouseId", quantity, status, "expiresAt", "createdAt", "idempotencyKey") VALUES ($1, $2, $3, $4, \'PENDING\', $5, $6, $7)',
+    [reservationId, productId, warehouseId, quantity, expiresAt, now, idempotencyKey || null]
+  );
 
-  const responseData = { reservationId: reservation.id, expiresAt: reservation.expiresAt };
+  const responseData = { reservationId, expiresAt };
 
   if (idempotencyKey) {
-    await prisma.idempotencyRecord.create({
-      data: {
-        key: idempotencyKey,
-        responseBody: JSON.stringify(responseData),
-        statusCode: 201,
-        expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-      },
-    }).catch(() => {}); // ignore duplicate key race
+    await pool.query(
+      'INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING',
+      [idempotencyKey, JSON.stringify(responseData), 201, new Date(now.getTime() + 24 * 60 * 60 * 1000), now]
+    ).catch(() => {}); // ignore duplicate key race
   }
 
   return { response: responseData, status: 201 };
@@ -143,21 +137,30 @@ export async function confirmReservation(reservationId: string, idempotencyKey?:
   const now = new Date();
 
   if (idempotencyKey) {
-    const existing = await prisma.idempotencyRecord.findUnique({ where: { key: idempotencyKey } });
-    if (existing) {
-      if (now > existing.expiresAt) {
-        await prisma.idempotencyRecord.delete({ where: { key: idempotencyKey } });
+    const existing = await pool.query(
+      'SELECT * FROM "IdempotencyRecord" WHERE key = $1',
+      [idempotencyKey]
+    );
+    if (existing.rowCount && existing.rowCount > 0) {
+      const record = existing.rows[0];
+      if (now > new Date(record.expiresAt)) {
+        await pool.query('DELETE FROM "IdempotencyRecord" WHERE key = $1', [idempotencyKey]);
       } else {
-        return { response: JSON.parse(existing.responseBody), status: existing.statusCode };
+        return { response: JSON.parse(record.responseBody), status: record.statusCode };
       }
     }
   }
 
-  const reservation = await prisma.reservation.findUnique({ where: { id: reservationId } });
+  const resQuery = await pool.query(
+    'SELECT * FROM "Reservation" WHERE id = $1',
+    [reservationId]
+  );
 
-  if (!reservation) {
+  if (resQuery.rowCount === 0) {
     return { response: { error: 'Reservation not found.' }, status: 404 };
   }
+
+  const reservation = resQuery.rows[0];
 
   if (reservation.status === 'CONFIRMED') {
     return {
@@ -175,48 +178,41 @@ export async function confirmReservation(reservationId: string, idempotencyKey?:
   if (isExpired) {
     // Mark as expired and restore stock if still PENDING
     if (reservation.status === 'PENDING') {
-      await prisma.reservation.updateMany({
-        where: { id: reservationId, status: 'PENDING' },
-        data: { status: 'EXPIRED', releasedAt: now },
-      });
-      await prisma.inventory.update({
-        where: { productId_warehouseId: { productId: reservation.productId, warehouseId: reservation.warehouseId } },
-        data: { reservedUnits: { decrement: reservation.quantity } },
-      });
+      await pool.query(
+        'UPDATE "Reservation" SET status = \'EXPIRED\', "releasedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
+        [now, reservationId]
+      );
+      await pool.query(
+        'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
+        [reservation.quantity, reservation.productId, reservation.warehouseId]
+      );
     }
     return { response: { error: 'Reservation has expired. Inventory returned to available stock.' }, status: 410 };
   }
 
   // Atomic confirm — only succeeds if still PENDING
-  const confirmedCount = await prisma.reservation.updateMany({
-    where: { id: reservationId, status: 'PENDING' },
-    data: { status: 'CONFIRMED', confirmedAt: now },
-  });
+  const confirmedCount = await pool.query(
+    'UPDATE "Reservation" SET status = \'CONFIRMED\', "confirmedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
+    [now, reservationId]
+  );
 
-  if (confirmedCount.count === 0) {
+  if (!confirmedCount.rowCount || confirmedCount.rowCount === 0) {
     return { response: { error: 'Reservation could not be confirmed (concurrent state change).' }, status: 409 };
   }
 
   // Permanently deduct stock
-  await prisma.inventory.update({
-    where: { productId_warehouseId: { productId: reservation.productId, warehouseId: reservation.warehouseId } },
-    data: {
-      totalUnits: { decrement: reservation.quantity },
-      reservedUnits: { decrement: reservation.quantity },
-    },
-  });
+  await pool.query(
+    'UPDATE "Inventory" SET "totalUnits" = "totalUnits" - $1, "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
+    [reservation.quantity, reservation.productId, reservation.warehouseId]
+  );
 
   const responseData = { message: 'Reservation confirmed. Stock permanently deducted.', reservationId, status: 'CONFIRMED' };
 
   if (idempotencyKey) {
-    await prisma.idempotencyRecord.create({
-      data: {
-        key: idempotencyKey,
-        responseBody: JSON.stringify(responseData),
-        statusCode: 200,
-        expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
-      },
-    }).catch(() => {});
+    await pool.query(
+      'INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING',
+      [idempotencyKey, JSON.stringify(responseData), 200, new Date(now.getTime() + 24 * 60 * 60 * 1000), now]
+    ).catch(() => {});
   }
 
   return { response: responseData, status: 200 };
@@ -228,11 +224,16 @@ export async function confirmReservation(reservationId: string, idempotencyKey?:
 export async function releaseReservation(reservationId: string) {
   const now = new Date();
 
-  const reservation = await prisma.reservation.findUnique({ where: { id: reservationId } });
+  const resQuery = await pool.query(
+    'SELECT * FROM "Reservation" WHERE id = $1',
+    [reservationId]
+  );
 
-  if (!reservation) {
+  if (resQuery.rowCount === 0) {
     return { response: { error: 'Reservation not found.' }, status: 404 };
   }
+
+  const reservation = resQuery.rows[0];
 
   if (reservation.status === 'RELEASED') {
     return { response: { message: 'Reservation already released.', reservationId, status: 'RELEASED' }, status: 200 };
@@ -247,19 +248,19 @@ export async function releaseReservation(reservationId: string) {
   }
 
   // Atomic release — only succeeds if still PENDING
-  const releasedCount = await prisma.reservation.updateMany({
-    where: { id: reservationId, status: 'PENDING' },
-    data: { status: 'RELEASED', releasedAt: now },
-  });
+  const releasedCount = await pool.query(
+    'UPDATE "Reservation" SET status = \'RELEASED\', "releasedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
+    [now, reservationId]
+  );
 
-  if (releasedCount.count === 0) {
+  if (!releasedCount.rowCount || releasedCount.rowCount === 0) {
     return { response: { message: 'Reservation already resolved.', reservationId }, status: 200 };
   }
 
-  await prisma.inventory.update({
-    where: { productId_warehouseId: { productId: reservation.productId, warehouseId: reservation.warehouseId } },
-    data: { reservedUnits: { decrement: reservation.quantity } },
-  });
+  await pool.query(
+    'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
+    [reservation.quantity, reservation.productId, reservation.warehouseId]
+  );
 
   return {
     response: { message: 'Reservation released. Stock returned to available pool.', reservationId, status: 'RELEASED' },

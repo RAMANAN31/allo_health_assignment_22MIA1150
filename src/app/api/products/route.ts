@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { pool } from '@/lib/db';
 import { lazyCleanupExpiredReservations } from '@/lib/reservation-service';
 
 export const dynamic = 'force-dynamic';
 
-// Manually define the product payload type to ensure compilation without Prisma import dependencies
 interface ProductWithInventory {
   id: string;
   name: string;
@@ -26,22 +25,55 @@ export async function GET() {
     // 1. Run lazy cleanup of expired reservations before returning data to ensure accuracy
     await lazyCleanupExpiredReservations();
 
-    // 2. Fetch products alongside their complete inventory mappings and warehouse names
-    const products = await prisma.product.findMany({
-      include: {
-        inventory: {
-          include: {
-            warehouse: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'asc',
-      },
-    });
+    // 2. Fetch products alongside their complete inventory mappings and warehouse names using a JOIN query
+    const result = await pool.query(`
+      SELECT 
+        p.id as "productId",
+        p.name as "productName",
+        p.sku as "productSku",
+        p.description as "productDescription",
+        i."totalUnits",
+        i."reservedUnits",
+        w.id as "warehouseId",
+        w.name as "warehouseName",
+        w.location as "warehouseLocation"
+      FROM "Product" p
+      LEFT JOIN "Inventory" i ON p.id = i."productId"
+      LEFT JOIN "Warehouse" w ON i."warehouseId" = w.id
+      ORDER BY p."createdAt" ASC;
+    `);
+
+    // Group the flat join rows into nested product structures
+    const productMap = new Map<string, ProductWithInventory>();
+
+    for (const row of result.rows) {
+      if (!productMap.has(row.productId)) {
+        productMap.set(row.productId, {
+          id: row.productId,
+          name: row.productName,
+          sku: row.productSku,
+          description: row.productDescription,
+          inventory: []
+        });
+      }
+      
+      if (row.warehouseId) {
+        productMap.get(row.productId)!.inventory.push({
+          warehouseId: row.warehouseId,
+          totalUnits: row.totalUnits,
+          reservedUnits: row.reservedUnits,
+          warehouse: {
+            name: row.warehouseName,
+            location: row.warehouseLocation
+          }
+        });
+      }
+    }
+
+    const products = Array.from(productMap.values());
 
     // 3. Format the response to calculate dynamic stats
-    const formattedProducts = (products as ProductWithInventory[]).map((product) => {
+    const formattedProducts = products.map((product) => {
       let totalStock = 0;
       let totalReserved = 0;
 
