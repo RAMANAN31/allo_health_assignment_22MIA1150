@@ -1,8 +1,20 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { lazyCleanupExpiredReservations } from '@/lib/reservation-service';
+import { Prisma } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
+
+// Define standard Prisma query payload type with includes for type safety
+type ProductWithInventory = Prisma.ProductGetPayload<{
+  include: {
+    inventory: {
+      include: {
+        warehouse: true;
+      };
+    };
+  };
+}>;
 
 export async function GET() {
   try {
@@ -24,7 +36,7 @@ export async function GET() {
     });
 
     // 3. Format the response to calculate dynamic stats
-    const formattedProducts = products.map((product) => {
+    const formattedProducts = (products as ProductWithInventory[]).map((product) => {
       let totalStock = 0;
       let totalReserved = 0;
 
