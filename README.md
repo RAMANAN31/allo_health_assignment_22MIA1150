@@ -1,4 +1,8 @@
 # OmniStock: Multi-Warehouse Inventory Hold & Reservation System
+LINK:
+[allo-health-assignment-22-mia-1150.vercel.app
+](https://allo-health-assignment-22-mia-1150.vercel.app/)  
+
 
 OmniStock is a production-grade, highly concurrent inventory reservation and checkout hold system designed for a multi-warehouse eCommerce platform. Engineered with **Next.js 15+ App Router**, **TypeScript**, **@supabase/supabase-js**, and **PostgreSQL**, this application simulates a checkout flow where inventory holds are safely locked during payment processing to prevent overselling.
 
