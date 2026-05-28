@@ -84,7 +84,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY="[your-anon-key]"
 ```bash
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000) (or your Vercel deployment) to view the real-time holding dashboard!
+Open [allo-health-assignment-22-mia-1150.vercel.app
+](allo-health-assignment-22-mia-1150.vercel.app) (or your Vercel deployment) to view the real-time holding dashboard!
 *(Note: Use the "Seed Catalog" button in the UI to populate your Supabase database with dummy products if it is empty).*
 
 ---
