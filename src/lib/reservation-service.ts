@@ -1,4 +1,4 @@
-import { pool } from './db';
+import { sql } from './db';
 import crypto from 'crypto';
 
 /**
@@ -8,28 +8,28 @@ import crypto from 'crypto';
 export async function lazyCleanupExpiredReservations() {
   const now = new Date();
 
-  const expired = await pool.query(
-    'SELECT * FROM "Reservation" WHERE status = \'PENDING\' AND "expiresAt" < $1',
-    [now]
-  );
+  const expired = await sql`
+    SELECT * FROM "Reservation" WHERE status = 'PENDING' AND "expiresAt" < ${now}
+  `;
 
-  if (expired.rowCount === 0) return;
+  if (expired.length === 0) return;
 
-  console.log(`[Lazy Cleanup] Found ${expired.rowCount} expired reservations to clean up.`);
+  console.log(`[Lazy Cleanup] Found ${expired.length} expired reservations to clean up.`);
 
-  for (const res of expired.rows) {
+  for (const res of expired) {
     try {
       // Atomic update: only proceed if still PENDING (guards against double-cleanup)
-      const updated = await pool.query(
-        'UPDATE "Reservation" SET status = \'EXPIRED\', "releasedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
-        [now, res.id]
-      );
+      const updated = await sql`
+        UPDATE "Reservation" SET status = 'EXPIRED', "releasedAt" = ${now}
+        WHERE id = ${res.id} AND status = 'PENDING'
+        RETURNING id
+      `;
 
-      if (updated.rowCount && updated.rowCount > 0) {
-        await pool.query(
-          'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
-          [res.quantity, res.productId, res.warehouseId]
-        );
+      if (updated.length > 0) {
+        await sql`
+          UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - ${res.quantity}
+          WHERE "productId" = ${res.productId} AND "warehouseId" = ${res.warehouseId}
+        `;
         console.log(`[Lazy Cleanup] Expired reservation ${res.id}, restored ${res.quantity} units.`);
       }
     } catch (err) {
@@ -44,7 +44,7 @@ export async function lazyCleanupExpiredReservations() {
  * - We capture the current reservedUnits value.
  * - We attempt an atomic conditional UPDATE that only succeeds when
  *   reservedUnits + quantity <= totalUnits.
- * - If the row was already modified concurrently, rowCount is 0
+ * - If the row was already modified concurrently, the update returns 0 rows
  *   and we return 409 Conflict, perfectly mimicking SELECT FOR UPDATE semantics.
  */
 export async function createReservation(
@@ -58,14 +58,13 @@ export async function createReservation(
 
   // 1. Check Idempotency Key
   if (idempotencyKey) {
-    const existing = await pool.query(
-      'SELECT * FROM "IdempotencyRecord" WHERE key = $1',
-      [idempotencyKey]
-    );
-    if (existing.rowCount && existing.rowCount > 0) {
-      const record = existing.rows[0];
+    const existing = await sql`
+      SELECT * FROM "IdempotencyRecord" WHERE key = ${idempotencyKey}
+    `;
+    if (existing.length > 0) {
+      const record = existing[0];
       if (now > new Date(record.expiresAt)) {
-        await pool.query('DELETE FROM "IdempotencyRecord" WHERE key = $1', [idempotencyKey]);
+        await sql`DELETE FROM "IdempotencyRecord" WHERE key = ${idempotencyKey}`;
       } else {
         return { response: JSON.parse(record.responseBody), status: record.statusCode };
       }
@@ -76,55 +75,63 @@ export async function createReservation(
   await lazyCleanupExpiredReservations();
 
   // 3. Read current inventory snapshot
-  const invRes = await pool.query(
-    'SELECT * FROM "Inventory" WHERE "productId" = $1 AND "warehouseId" = $2',
-    [productId, warehouseId]
-  );
+  const invRes = await sql`
+    SELECT * FROM "Inventory" WHERE "productId" = ${productId} AND "warehouseId" = ${warehouseId}
+  `;
 
-  if (invRes.rowCount === 0) {
+  if (invRes.length === 0) {
     return { response: { error: 'No inventory record found for the given product and warehouse.' }, status: 404 };
   }
 
-  const inventory = invRes.rows[0];
+  const inventory = invRes[0];
   const available = inventory.totalUnits - inventory.reservedUnits;
   if (available < quantity) {
     const resp = { error: 'Insufficient stock available in the selected warehouse.' };
     if (idempotencyKey) {
-      await pool.query(
-        'INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING',
-        [idempotencyKey, JSON.stringify(resp), 409, new Date(now.getTime() + 24 * 60 * 60 * 1000), now]
-      ).catch(() => {}); // ignore duplicate key race
+      try {
+        await sql`
+          INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt")
+          VALUES (${idempotencyKey}, ${JSON.stringify(resp)}, ${409}, ${new Date(now.getTime() + 24 * 60 * 60 * 1000)}, ${now})
+          ON CONFLICT (key) DO NOTHING
+        `;
+      } catch { /* ignore duplicate key race */ }
     }
     return { response: resp, status: 409 };
   }
 
   // 4. Atomic conditional update — only succeeds if stock hasn't changed
   // This is optimistic locking: we condition on the exact reservedUnits we read.
-  const updated = await pool.query(
-    'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" + $1 WHERE "productId" = $2 AND "warehouseId" = $3 AND "reservedUnits" = $4 AND "totalUnits" >= "reservedUnits" + $1',
-    [quantity, productId, warehouseId, inventory.reservedUnits]
-  );
+  const updated = await sql`
+    UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" + ${quantity}
+    WHERE "productId" = ${productId} AND "warehouseId" = ${warehouseId}
+      AND "reservedUnits" = ${inventory.reservedUnits}
+      AND "totalUnits" >= "reservedUnits" + ${quantity}
+    RETURNING id
+  `;
 
-  // 5. If rowCount is 0, a concurrent request changed the row — conflict!
-  if (!updated.rowCount || updated.rowCount === 0) {
+  // 5. If 0 rows returned, a concurrent request changed the row — conflict!
+  if (updated.length === 0) {
     const resp = { error: 'Insufficient stock available in the selected warehouse.' };
     return { response: resp, status: 409 };
   }
 
   // 6. Create the Reservation record using crypto.randomUUID()
   const reservationId = crypto.randomUUID();
-  await pool.query(
-    'INSERT INTO "Reservation" (id, "productId", "warehouseId", quantity, status, "expiresAt", "createdAt", "idempotencyKey") VALUES ($1, $2, $3, $4, \'PENDING\', $5, $6, $7)',
-    [reservationId, productId, warehouseId, quantity, expiresAt, now, idempotencyKey || null]
-  );
+  await sql`
+    INSERT INTO "Reservation" (id, "productId", "warehouseId", quantity, status, "expiresAt", "createdAt", "idempotencyKey")
+    VALUES (${reservationId}, ${productId}, ${warehouseId}, ${quantity}, 'PENDING', ${expiresAt}, ${now}, ${idempotencyKey || null})
+  `;
 
   const responseData = { reservationId, expiresAt };
 
   if (idempotencyKey) {
-    await pool.query(
-      'INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING',
-      [idempotencyKey, JSON.stringify(responseData), 201, new Date(now.getTime() + 24 * 60 * 60 * 1000), now]
-    ).catch(() => {}); // ignore duplicate key race
+    try {
+      await sql`
+        INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt")
+        VALUES (${idempotencyKey}, ${JSON.stringify(responseData)}, ${201}, ${new Date(now.getTime() + 24 * 60 * 60 * 1000)}, ${now})
+        ON CONFLICT (key) DO NOTHING
+      `;
+    } catch { /* ignore duplicate key race */ }
   }
 
   return { response: responseData, status: 201 };
@@ -137,30 +144,28 @@ export async function confirmReservation(reservationId: string, idempotencyKey?:
   const now = new Date();
 
   if (idempotencyKey) {
-    const existing = await pool.query(
-      'SELECT * FROM "IdempotencyRecord" WHERE key = $1',
-      [idempotencyKey]
-    );
-    if (existing.rowCount && existing.rowCount > 0) {
-      const record = existing.rows[0];
+    const existing = await sql`
+      SELECT * FROM "IdempotencyRecord" WHERE key = ${idempotencyKey}
+    `;
+    if (existing.length > 0) {
+      const record = existing[0];
       if (now > new Date(record.expiresAt)) {
-        await pool.query('DELETE FROM "IdempotencyRecord" WHERE key = $1', [idempotencyKey]);
+        await sql`DELETE FROM "IdempotencyRecord" WHERE key = ${idempotencyKey}`;
       } else {
         return { response: JSON.parse(record.responseBody), status: record.statusCode };
       }
     }
   }
 
-  const resQuery = await pool.query(
-    'SELECT * FROM "Reservation" WHERE id = $1',
-    [reservationId]
-  );
+  const resQuery = await sql`
+    SELECT * FROM "Reservation" WHERE id = ${reservationId}
+  `;
 
-  if (resQuery.rowCount === 0) {
+  if (resQuery.length === 0) {
     return { response: { error: 'Reservation not found.' }, status: 404 };
   }
 
-  const reservation = resQuery.rows[0];
+  const reservation = resQuery[0];
 
   if (reservation.status === 'CONFIRMED') {
     return {
@@ -178,41 +183,45 @@ export async function confirmReservation(reservationId: string, idempotencyKey?:
   if (isExpired) {
     // Mark as expired and restore stock if still PENDING
     if (reservation.status === 'PENDING') {
-      await pool.query(
-        'UPDATE "Reservation" SET status = \'EXPIRED\', "releasedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
-        [now, reservationId]
-      );
-      await pool.query(
-        'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
-        [reservation.quantity, reservation.productId, reservation.warehouseId]
-      );
+      await sql`
+        UPDATE "Reservation" SET status = 'EXPIRED', "releasedAt" = ${now}
+        WHERE id = ${reservationId} AND status = 'PENDING'
+      `;
+      await sql`
+        UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - ${reservation.quantity}
+        WHERE "productId" = ${reservation.productId} AND "warehouseId" = ${reservation.warehouseId}
+      `;
     }
     return { response: { error: 'Reservation has expired. Inventory returned to available stock.' }, status: 410 };
   }
 
   // Atomic confirm — only succeeds if still PENDING
-  const confirmedCount = await pool.query(
-    'UPDATE "Reservation" SET status = \'CONFIRMED\', "confirmedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
-    [now, reservationId]
-  );
+  const confirmed = await sql`
+    UPDATE "Reservation" SET status = 'CONFIRMED', "confirmedAt" = ${now}
+    WHERE id = ${reservationId} AND status = 'PENDING'
+    RETURNING id
+  `;
 
-  if (!confirmedCount.rowCount || confirmedCount.rowCount === 0) {
+  if (confirmed.length === 0) {
     return { response: { error: 'Reservation could not be confirmed (concurrent state change).' }, status: 409 };
   }
 
   // Permanently deduct stock
-  await pool.query(
-    'UPDATE "Inventory" SET "totalUnits" = "totalUnits" - $1, "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
-    [reservation.quantity, reservation.productId, reservation.warehouseId]
-  );
+  await sql`
+    UPDATE "Inventory" SET "totalUnits" = "totalUnits" - ${reservation.quantity}, "reservedUnits" = "reservedUnits" - ${reservation.quantity}
+    WHERE "productId" = ${reservation.productId} AND "warehouseId" = ${reservation.warehouseId}
+  `;
 
   const responseData = { message: 'Reservation confirmed. Stock permanently deducted.', reservationId, status: 'CONFIRMED' };
 
   if (idempotencyKey) {
-    await pool.query(
-      'INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt") VALUES ($1, $2, $3, $4, $5) ON CONFLICT (key) DO NOTHING',
-      [idempotencyKey, JSON.stringify(responseData), 200, new Date(now.getTime() + 24 * 60 * 60 * 1000), now]
-    ).catch(() => {});
+    try {
+      await sql`
+        INSERT INTO "IdempotencyRecord" (key, "responseBody", "statusCode", "expiresAt", "createdAt")
+        VALUES (${idempotencyKey}, ${JSON.stringify(responseData)}, ${200}, ${new Date(now.getTime() + 24 * 60 * 60 * 1000)}, ${now})
+        ON CONFLICT (key) DO NOTHING
+      `;
+    } catch { /* ignore */ }
   }
 
   return { response: responseData, status: 200 };
@@ -224,16 +233,15 @@ export async function confirmReservation(reservationId: string, idempotencyKey?:
 export async function releaseReservation(reservationId: string) {
   const now = new Date();
 
-  const resQuery = await pool.query(
-    'SELECT * FROM "Reservation" WHERE id = $1',
-    [reservationId]
-  );
+  const resQuery = await sql`
+    SELECT * FROM "Reservation" WHERE id = ${reservationId}
+  `;
 
-  if (resQuery.rowCount === 0) {
+  if (resQuery.length === 0) {
     return { response: { error: 'Reservation not found.' }, status: 404 };
   }
 
-  const reservation = resQuery.rows[0];
+  const reservation = resQuery[0];
 
   if (reservation.status === 'RELEASED') {
     return { response: { message: 'Reservation already released.', reservationId, status: 'RELEASED' }, status: 200 };
@@ -248,19 +256,20 @@ export async function releaseReservation(reservationId: string) {
   }
 
   // Atomic release — only succeeds if still PENDING
-  const releasedCount = await pool.query(
-    'UPDATE "Reservation" SET status = \'RELEASED\', "releasedAt" = $1 WHERE id = $2 AND status = \'PENDING\'',
-    [now, reservationId]
-  );
+  const released = await sql`
+    UPDATE "Reservation" SET status = 'RELEASED', "releasedAt" = ${now}
+    WHERE id = ${reservationId} AND status = 'PENDING'
+    RETURNING id
+  `;
 
-  if (!releasedCount.rowCount || releasedCount.rowCount === 0) {
+  if (released.length === 0) {
     return { response: { message: 'Reservation already resolved.', reservationId }, status: 200 };
   }
 
-  await pool.query(
-    'UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - $1 WHERE "productId" = $2 AND "warehouseId" = $3',
-    [reservation.quantity, reservation.productId, reservation.warehouseId]
-  );
+  await sql`
+    UPDATE "Inventory" SET "reservedUnits" = "reservedUnits" - ${reservation.quantity}
+    WHERE "productId" = ${reservation.productId} AND "warehouseId" = ${reservation.warehouseId}
+  `;
 
   return {
     response: { message: 'Reservation released. Stock returned to available pool.', reservationId, status: 'RELEASED' },

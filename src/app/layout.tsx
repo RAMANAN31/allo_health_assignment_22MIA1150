@@ -10,7 +10,7 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: 'OmniStock | Multi-Warehouse Inventory Hold & Reservation System',
   description: 'Enterprise-grade real-time inventory hold and atomic checkout locking system. Engineered using PostgreSQL SELECT FOR UPDATE locks to prevent overselling under high concurrency.',
-  keywords: ['inventory', 'reservation', 'eCommerce', 'concurrency locking', 'multi-warehouse', 'Next.js', 'PostgreSQL', 'Prisma'],
+  keywords: ['inventory', 'reservation', 'eCommerce', 'concurrency locking', 'multi-warehouse', 'Next.js', 'PostgreSQL', 'Neon Serverless'],
 };
 
 export default function RootLayout({

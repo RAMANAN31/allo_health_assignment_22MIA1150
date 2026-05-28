@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { pool } from '@/lib/db';
+import { sql } from '@/lib/db';
 import { lazyCleanupExpiredReservations } from '@/lib/reservation-service';
 
 export const dynamic = 'force-dynamic';
@@ -25,8 +25,8 @@ export async function GET() {
     // 1. Run lazy cleanup of expired reservations before returning data to ensure accuracy
     await lazyCleanupExpiredReservations();
 
-    // 2. Fetch products alongside their complete inventory mappings and warehouse names using a JOIN query
-    const result = await pool.query(`
+    // 2. Fetch products alongside their complete inventory mappings and warehouse names
+    const rows = await sql`
       SELECT 
         p.id as "productId",
         p.name as "productName",
@@ -40,13 +40,13 @@ export async function GET() {
       FROM "Product" p
       LEFT JOIN "Inventory" i ON p.id = i."productId"
       LEFT JOIN "Warehouse" w ON i."warehouseId" = w.id
-      ORDER BY p."createdAt" ASC;
-    `);
+      ORDER BY p."createdAt" ASC
+    `;
 
     // Group the flat join rows into nested product structures
     const productMap = new Map<string, ProductWithInventory>();
 
-    for (const row of result.rows) {
+    for (const row of rows) {
       if (!productMap.has(row.productId)) {
         productMap.set(row.productId, {
           id: row.productId,

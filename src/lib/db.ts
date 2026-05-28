@@ -1,15 +1,6 @@
-import { Pool } from '@neondatabase/serverless';
+import { neon } from '@neondatabase/serverless';
 
-const globalForPool = globalThis as unknown as {
-  pool: Pool | undefined;
-};
-
-function createPool() {
-  return new Pool({
-    connectionString: process.env.DATABASE_URL,
-  });
-}
-
-export const pool = globalForPool.pool ?? createPool();
-
-if (process.env.NODE_ENV !== 'production') globalForPool.pool = pool;
+// Create a stateless HTTP-based SQL client.
+// Each call is an independent HTTPS request — perfect for Vercel Serverless Functions.
+// No WebSocket setup, no connection pooling, no teardown required.
+export const sql = neon(process.env.DATABASE_URL!);

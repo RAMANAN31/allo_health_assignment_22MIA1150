@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
-import { pool } from '@/lib/db';
+import { sql } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const result = await pool.query('SELECT * FROM "Warehouse" ORDER BY name ASC');
-    const warehouses = result.rows;
+    const warehouses = await sql`SELECT * FROM "Warehouse" ORDER BY name ASC`;
 
     return NextResponse.json({ warehouses }, { status: 200 });
   } catch (error) {

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { pool } from '@/lib/db';
+import { sql } from '@/lib/db';
 import crypto from 'crypto';
 
 export async function POST() {
@@ -7,11 +7,11 @@ export async function POST() {
     console.log('[API Seed] Clearing database tables...');
     
     // Clean in correct dependency order
-    await pool.query('DELETE FROM "IdempotencyRecord"');
-    await pool.query('DELETE FROM "Reservation"');
-    await pool.query('DELETE FROM "Inventory"');
-    await pool.query('DELETE FROM "Warehouse"');
-    await pool.query('DELETE FROM "Product"');
+    await sql`DELETE FROM "IdempotencyRecord"`;
+    await sql`DELETE FROM "Reservation"`;
+    await sql`DELETE FROM "Inventory"`;
+    await sql`DELETE FROM "Warehouse"`;
+    await sql`DELETE FROM "Product"`;
 
     console.log('[API Seed] Seeding Products...');
     const p1Id = crypto.randomUUID();
@@ -19,110 +19,54 @@ export async function POST() {
     const p3Id = crypto.randomUUID();
     const now = new Date();
 
-    await pool.query(
-      'INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $5)',
-      [
-        p1Id,
-        'Vortex Pro Wireless Headphones',
-        'VORTEX-PRO-001',
-        'Noise-cancelling high-fidelity wireless over-ear headphones with 40-hour battery life.',
-        now
-      ]
-    );
+    await sql`
+      INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt")
+      VALUES (${p1Id}, ${'Vortex Pro Wireless Headphones'}, ${'VORTEX-PRO-001'}, ${'Noise-cancelling high-fidelity wireless over-ear headphones with 40-hour battery life.'}, ${now}, ${now})
+    `;
 
-    await pool.query(
-      'INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $5)',
-      [
-        p2Id,
-        'Apex Mechanical Keyboard',
-        'APEX-MECH-002',
-        'Hot-swappable mechanical keyboard with custom linear switches and RGB backlighting.',
-        now
-      ]
-    );
+    await sql`
+      INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt")
+      VALUES (${p2Id}, ${'Apex Mechanical Keyboard'}, ${'APEX-MECH-002'}, ${'Hot-swappable mechanical keyboard with custom linear switches and RGB backlighting.'}, ${now}, ${now})
+    `;
 
-    await pool.query(
-      'INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5, $5)',
-      [
-        p3Id,
-        'Aero Ergonomic Office Chair',
-        'AERO-CHAIR-003',
-        'Premium mesh ergonomic chair with 3D armrests and lumbar support.',
-        now
-      ]
-    );
+    await sql`
+      INSERT INTO "Product" (id, name, sku, description, "createdAt", "updatedAt")
+      VALUES (${p3Id}, ${'Aero Ergonomic Office Chair'}, ${'AERO-CHAIR-003'}, ${'Premium mesh ergonomic chair with 3D armrests and lumbar support.'}, ${now}, ${now})
+    `;
 
     console.log('[API Seed] Seeding Warehouses...');
     const wEastId = crypto.randomUUID();
     const wWestId = crypto.randomUUID();
     const wCentralId = crypto.randomUUID();
 
-    await pool.query(
-      'INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $4)',
-      [wEastId, 'East Coast Fulfillment Center', 'New York, NY', now]
-    );
-
-    await pool.query(
-      'INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $4)',
-      [wWestId, 'West Coast Logistics Hub', 'Los Angeles, CA', now]
-    );
-
-    await pool.query(
-      'INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $4)',
-      [wCentralId, 'Midwest Distribution Center', 'Chicago, IL', now]
-    );
+    await sql`
+      INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt")
+      VALUES (${wEastId}, ${'East Coast Fulfillment Center'}, ${'New York, NY'}, ${now}, ${now})
+    `;
+    await sql`
+      INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt")
+      VALUES (${wWestId}, ${'West Coast Logistics Hub'}, ${'Los Angeles, CA'}, ${now}, ${now})
+    `;
+    await sql`
+      INSERT INTO "Warehouse" (id, name, location, "createdAt", "updatedAt")
+      VALUES (${wCentralId}, ${'Midwest Distribution Center'}, ${'Chicago, IL'}, ${now}, ${now})
+    `;
 
     console.log('[API Seed] Seeding Inventory Stock breakdowns...');
-    // Vortex Headphones:
-    // East: 15 units
-    // West: 8 units
-    // Central: 0 units (out of stock)
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p1Id, wEastId, 15, 0, now]
-    );
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p1Id, wWestId, 8, 0, now]
-    );
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p1Id, wCentralId, 0, 0, now]
-    );
+    // Vortex Headphones: East: 15, West: 8, Central: 0 (out of stock)
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p1Id}, ${wEastId}, ${15}, ${0}, ${now})`;
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p1Id}, ${wWestId}, ${8}, ${0}, ${now})`;
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p1Id}, ${wCentralId}, ${0}, ${0}, ${now})`;
 
-    // Apex Keyboard:
-    // East: 5 units
-    // West: 12 units
-    // Central: 20 units
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p2Id, wEastId, 5, 0, now]
-    );
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p2Id, wWestId, 12, 0, now]
-    );
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p2Id, wCentralId, 20, 0, now]
-    );
+    // Apex Keyboard: East: 5, West: 12, Central: 20
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p2Id}, ${wEastId}, ${5}, ${0}, ${now})`;
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p2Id}, ${wWestId}, ${12}, ${0}, ${now})`;
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p2Id}, ${wCentralId}, ${20}, ${0}, ${now})`;
 
-    // Aero Chair:
-    // East: 2 units (low stock!)
-    // West: 0 units
-    // Central: 1 units
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p3Id, wEastId, 2, 0, now]
-    );
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p3Id, wWestId, 0, 0, now]
-    );
-    await pool.query(
-      'INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES ($1, $2, $3, $4, $5, $6)',
-      [crypto.randomUUID(), p3Id, wCentralId, 1, 0, now]
-    );
+    // Aero Chair: East: 2 (low!), West: 0, Central: 1
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p3Id}, ${wEastId}, ${2}, ${0}, ${now})`;
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p3Id}, ${wWestId}, ${0}, ${0}, ${now})`;
+    await sql`INSERT INTO "Inventory" (id, "productId", "warehouseId", "totalUnits", "reservedUnits", "updatedAt") VALUES (${crypto.randomUUID()}, ${p3Id}, ${wCentralId}, ${1}, ${0}, ${now})`;
 
     console.log('[API Seed] Database seeding completed successfully!');
     return NextResponse.json({ success: true, message: 'Database successfully seeded.' }, { status: 201 });

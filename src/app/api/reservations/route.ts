@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { pool } from '@/lib/db';
+import { sql } from '@/lib/db';
 import { createReservation, lazyCleanupExpiredReservations } from '@/lib/reservation-service';
 
 export const dynamic = 'force-dynamic';
@@ -11,7 +11,7 @@ export async function GET() {
     await lazyCleanupExpiredReservations();
 
     // 2. Fetch the 50 most recent reservations with nested product and warehouse details
-    const result = await pool.query(`
+    const reservations = await sql`
       SELECT 
         r.id,
         r."productId",
@@ -29,10 +29,8 @@ export async function GET() {
       JOIN "Product" p ON r."productId" = p.id
       JOIN "Warehouse" w ON r."warehouseId" = w.id
       ORDER BY r."createdAt" DESC
-      LIMIT 50;
-    `);
-
-    const reservations = result.rows;
+      LIMIT 50
+    `;
 
     return NextResponse.json({ reservations }, { status: 200 });
   } catch (error) {
