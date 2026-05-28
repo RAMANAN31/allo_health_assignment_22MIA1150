@@ -85,7 +85,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY="[your-anon-key]"
 npm run dev
 ```
 Open [allo-health-assignment-22-mia-1150.vercel.app
-](allo-health-assignment-22-mia-1150.vercel.app)  to view the real-time holding dashboard!
+](https://allo-health-assignment-22-mia-1150.vercel.app/)  to view the real-time holding dashboard!
 
 ---
 
