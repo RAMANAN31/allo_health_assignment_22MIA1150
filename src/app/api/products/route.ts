@@ -1,24 +1,8 @@
 import { NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { lazyCleanupExpiredReservations } from '@/lib/reservation-service';
 
 export const dynamic = 'force-dynamic';
-
-interface ProductWithInventory {
-  id: string;
-  name: string;
-  sku: string;
-  description: string | null;
-  inventory: {
-    warehouseId: string;
-    totalUnits: number;
-    reservedUnits: number;
-    warehouse: {
-      name: string;
-      location: string;
-    };
-  }[];
-}
 
 export async function GET() {
   try {
@@ -26,66 +10,45 @@ export async function GET() {
     await lazyCleanupExpiredReservations();
 
     // 2. Fetch products alongside their complete inventory mappings and warehouse names
-    const rows = await sql`
-      SELECT 
-        p.id as "productId",
-        p.name as "productName",
-        p.sku as "productSku",
-        p.description as "productDescription",
-        i."totalUnits",
-        i."reservedUnits",
-        w.id as "warehouseId",
-        w.name as "warehouseName",
-        w.location as "warehouseLocation"
-      FROM "Product" p
-      LEFT JOIN "Inventory" i ON p.id = i."productId"
-      LEFT JOIN "Warehouse" w ON i."warehouseId" = w.id
-      ORDER BY p."createdAt" ASC
-    `;
+    // Supabase will automatically map the foreign keys if set up correctly
+    const { data: products, error } = await supabase
+      .from('Product')
+      .select(`
+        id,
+        name,
+        sku,
+        description,
+        Inventory (
+          warehouseId,
+          totalUnits,
+          reservedUnits,
+          Warehouse (
+            name,
+            location
+          )
+        )
+      `)
+      .order('createdAt', { ascending: true });
 
-    // Group the flat join rows into nested product structures
-    const productMap = new Map<string, ProductWithInventory>();
-
-    for (const row of rows) {
-      if (!productMap.has(row.productId)) {
-        productMap.set(row.productId, {
-          id: row.productId,
-          name: row.productName,
-          sku: row.productSku,
-          description: row.productDescription,
-          inventory: []
-        });
-      }
-      
-      if (row.warehouseId) {
-        productMap.get(row.productId)!.inventory.push({
-          warehouseId: row.warehouseId,
-          totalUnits: row.totalUnits,
-          reservedUnits: row.reservedUnits,
-          warehouse: {
-            name: row.warehouseName,
-            location: row.warehouseLocation
-          }
-        });
-      }
+    if (error) {
+      console.error('[API] GET /api/products error:', error);
+      return NextResponse.json({ error: 'Database fetch error' }, { status: 500 });
     }
 
-    const products = Array.from(productMap.values());
-
     // 3. Format the response to calculate dynamic stats
-    const formattedProducts = products.map((product) => {
+    const formattedProducts = (products || []).map((product: any) => {
       let totalStock = 0;
       let totalReserved = 0;
 
-      const stockBreakdown = product.inventory.map((inv) => {
+      const stockBreakdown = (product.Inventory || []).map((inv: any) => {
         const available = inv.totalUnits - inv.reservedUnits;
         totalStock += inv.totalUnits;
         totalReserved += inv.reservedUnits;
 
         return {
           warehouseId: inv.warehouseId,
-          warehouseName: inv.warehouse.name,
-          location: inv.warehouse.location,
+          warehouseName: inv.Warehouse?.name || 'Unknown',
+          location: inv.Warehouse?.location || 'Unknown',
           totalUnits: inv.totalUnits,
           reservedUnits: inv.reservedUnits,
           availableUnits: Math.max(0, available),

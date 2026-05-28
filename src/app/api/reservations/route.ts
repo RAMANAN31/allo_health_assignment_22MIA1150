@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { sql } from '@/lib/db';
+import { supabase } from '@/lib/db';
 import { createReservation, lazyCleanupExpiredReservations } from '@/lib/reservation-service';
 
 export const dynamic = 'force-dynamic';
@@ -11,28 +11,40 @@ export async function GET() {
     await lazyCleanupExpiredReservations();
 
     // 2. Fetch the 50 most recent reservations with nested product and warehouse details
-    const reservations = await sql`
-      SELECT 
-        r.id,
-        r."productId",
-        r."warehouseId",
-        r.quantity,
-        r.status,
-        r."expiresAt",
-        r."createdAt",
-        r."confirmedAt",
-        r."releasedAt",
-        r."idempotencyKey",
-        json_build_object('name', p.name, 'sku', p.sku) as product,
-        json_build_object('name', w.name, 'location', w.location) as warehouse
-      FROM "Reservation" r
-      JOIN "Product" p ON r."productId" = p.id
-      JOIN "Warehouse" w ON r."warehouseId" = w.id
-      ORDER BY r."createdAt" DESC
-      LIMIT 50
-    `;
+    const { data: reservations, error } = await supabase
+      .from('Reservation')
+      .select(`
+        id,
+        productId,
+        warehouseId,
+        quantity,
+        status,
+        expiresAt,
+        createdAt,
+        confirmedAt,
+        releasedAt,
+        idempotencyKey,
+        Product ( name, sku ),
+        Warehouse ( name, location )
+      `)
+      .order('createdAt', { ascending: false })
+      .limit(50);
 
-    return NextResponse.json({ reservations }, { status: 200 });
+    if (error) {
+      console.error('[API] GET /api/reservations fetch error:', error);
+      return NextResponse.json({ error: 'Database fetch error' }, { status: 500 });
+    }
+
+    // Format the result to match the expected flat shape
+    const formattedReservations = (reservations || []).map((r: any) => ({
+      ...r,
+      product: r.Product,
+      warehouse: r.Warehouse,
+      Product: undefined,
+      Warehouse: undefined
+    }));
+
+    return NextResponse.json({ reservations: formattedReservations }, { status: 200 });
   } catch (error) {
     console.error('[API] GET /api/reservations error:', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

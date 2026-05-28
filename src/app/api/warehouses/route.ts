@@ -1,11 +1,19 @@
 import { NextResponse } from 'next/server';
-import { sql } from '@/lib/db';
+import { supabase } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const warehouses = await sql`SELECT * FROM "Warehouse" ORDER BY name ASC`;
+    const { data: warehouses, error } = await supabase
+      .from('Warehouse')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('[API] GET /api/warehouses fetch error:', error);
+      return NextResponse.json({ error: 'Database fetch error' }, { status: 500 });
+    }
 
     return NextResponse.json({ warehouses }, { status: 200 });
   } catch (error) {
