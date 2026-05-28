@@ -1,19 +1,18 @@
 # OmniStock: Multi-Warehouse Inventory Hold & Reservation System
 
-OmniStock is a production-grade, highly concurrent inventory reservation and checkout hold system designed for a multi-warehouse eCommerce platform. Engineered with **Next.js 15+ App Router**, **TypeScript**, **Prisma ORM**, and **PostgreSQL**, this application simulates a checkout flow where inventory holds are safely locked during payment processing to prevent overselling.
+OmniStock is a production-grade, highly concurrent inventory reservation and checkout hold system designed for a multi-warehouse eCommerce platform. Engineered with **Next.js 15+ App Router**, **TypeScript**, **@supabase/supabase-js**, and **PostgreSQL**, this application simulates a checkout flow where inventory holds are safely locked during payment processing to prevent overselling.
 
 ---
 
-##  Key Architectural Highlights
+## Key Architectural Highlights
 
-### 1. Concurrency Control (Atomic Row Locking)
-To satisfy the critical requirement of concurrency safety (exactly one buyer secures the last available unit under overlapping checkout attempts while others receive a `409 Conflict`), OmniStock employs **PostgreSQL Row-Level Locking (`SELECT ... FOR UPDATE`)**.
-- **The Strategy**: Prisma transactions (`prisma.$transaction`) wrap the booking flow. Inside, a raw database query (`SELECT * FROM "Inventory" ... FOR UPDATE`) is executed to acquire an exclusive lock on the specific `Product-Warehouse` inventory row.
+### 1. Concurrency Control (Optimistic Concurrency Control)
+To satisfy the critical requirement of concurrency safety (exactly one buyer secures the last available unit under overlapping checkout attempts while others receive a `409 Conflict`), OmniStock employs **Database-level Atomic Conditional Updates** via the Supabase REST API.
+- **The Strategy**: Instead of holding expensive long-running database transactions or using raw `SELECT ... FOR UPDATE` locks that can overwhelm serverless connection poolers, we utilize lock-free atomic `UPDATE` operations. The update query explicitly filters on the exact state of `reservedUnits` and available `totalUnits` at the time of the read. If another concurrent request alters the stock first, the update yields 0 rows affected, and the application safely fails with a `409 Conflict`.
 - **Why this choice?** 
   - Standard transaction isolation levels like `Serializable` result in high transaction failures, rollback overloads, and manual retry complexities.
   - Redis distributed locks (e.g., Redlock) add external infrastructure overhead, network overhead, and potential split-brain edge cases.
-  - Native database row locking blocks subsequent concurrent requests on the same row in a FIFO queue. The first transaction decreases stock and records the hold; subsequent queued transactions wake up, see the newly adjusted available inventory, and fail safely with a `409 Conflict`.
-- **Cross-Database Fallback**: To facilitate hassle-free local development, we implemented a dynamic catch-and-fallback mechanism. If the database provider does not support `FOR UPDATE` row locks (like SQLite), it falls back to standard transactions (which in SQLite automatically locks the database file, guaranteeing correctness in single-writer environments out of the box).
+  - Raw TCP Postgres locks (`FOR UPDATE`) often break or drop under serverless auto-scaling and connection proxy limits (e.g., pgBouncer/Supavisor). Using standard REST-based conditional updates guarantees perfect atomic concurrency while remaining natively serverless-friendly and horizontally scalable.
 
 ### 2. Multi-Tiered Hold Expiry System
 Reservations are created with a default 10-minute validity. If the payment succeeds, the status transitions to `CONFIRMED` and stock is permanently deducted. If they fail or expire, stock must be returned immediately. We use a **dual cleanup design**:
@@ -24,7 +23,7 @@ Reservations are created with a default 10-minute validity. If the payment succe
 To prevent double charging and duplicate reservations:
 - Headers are inspected for `x-idempotency-key`.
 - An `IdempotencyRecord` table caches successful reservation and confirmation HTTP statuses and responses in PostgreSQL (retaining them for 24 hours).
-- Repeated submissions instantly yield the cached original payload without executing redundant database locks or double-allocations.
+- Repeated submissions instantly yield the cached original payload without executing redundant database checks or double-allocations.
 
 ---
 
@@ -32,21 +31,19 @@ To prevent double charging and duplicate reservations:
 
 - **Framework**: Next.js 15+ (App Router, Dynamic Route Handlers, Client Components)
 - **Language**: TypeScript
-- **Database ORM**: Prisma ORM (v7+)
-- **Database Engine**: PostgreSQL (Supabase or Neon preferred; SQLite compatible fallback in dev)
+- **Database Client**: `@supabase/supabase-js` (REST API)
+- **Database Engine**: PostgreSQL (Supabase)
 - **Styling**: Tailwind CSS v4 & custom glassmorphic panels
 - **State Polling**: SWR (Stale-While-Revalidate) for real-time stock sync
 - **Validation**: Zod (for API request payload safety)
 
 ---
 
-##  Folder Structure
+## Folder Structure
 
-```
-├── prisma/
-│   ├── schema.prisma       # Database schema (Product, Warehouse, Inventory, Holds)
-│   └── seed.ts             # Data seeder for mock catalogs
+```text
 ├── scripts/
+│   ├── setup_db.mjs        # Database table schema initialization script
 │   └── concurrency-test.mjs # CLI concurrency race test runner
 ├── src/
 │   ├── app/
@@ -63,13 +60,13 @@ To prevent double charging and duplicate reservations:
 │   │   ├── layout.tsx      # Font and SEO configurations
 │   │   └── page.tsx        # High-fidelity stateful SWR Dashboard
 │   └── lib/
-│       ├── db.ts           # Singleton Prisma Client provider
-│       └── reservation-service.ts # Core transaction business logic
+│       ├── db.ts           # Supabase Client provider instance
+│       └── reservation-service.ts # Core business logic and atomic updates
 ```
 
 ---
 
-##  Local Setup & Installation
+## Local Setup & Installation
 
 ### 1. Clone the project and install dependencies
 ```bash
@@ -79,28 +76,20 @@ npm install
 ### 2. Configure Database Environment Variables
 Create a `.env` file in the root directory:
 ```env
-# Example for PostgreSQL connection (e.g. Supabase, Neon, or Local)
-DATABASE_URL="postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
-DIRECT_URL="postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
+NEXT_PUBLIC_SUPABASE_URL="https://[project-ref].supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="[your-anon-key]"
 ```
 
-*Note: If you wish to test with SQLite locally, modify `prisma/schema.prisma` datasource block provider to `"sqlite"` and define a local file URL in `.env` like `DATABASE_URL="file:./dev.db"`.*
-
-### 3. Generate Database Client & Run Migrations
-```bash
-npx prisma generate
-npx prisma migrate dev --name init
-```
-
-### 4. Run Development Server
+### 3. Run Development Server
 ```bash
 npm run dev
 ```
-Open [https://allo-health-assignment-22mia1150.vercel.com](https://allo-health-assignment-22mia1150.vercel.com) to view the real-time holding dashboard!
+Open [http://localhost:3000](http://localhost:3000) (or your Vercel deployment) to view the real-time holding dashboard!
+*(Note: Use the "Seed Catalog" button in the UI to populate your Supabase database with dummy products if it is empty).*
 
 ---
 
-##  Validating Concurrency & Race Conditions
+## Validating Concurrency & Race Conditions
 
 OmniStock supports **two methods** for testing transaction safety under high concurrency:
 
