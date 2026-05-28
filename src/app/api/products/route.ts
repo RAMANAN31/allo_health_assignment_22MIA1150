@@ -1,20 +1,25 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { lazyCleanupExpiredReservations } from '@/lib/reservation-service';
-import { Prisma } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 
-// Define standard Prisma query payload type with includes for type safety
-type ProductWithInventory = Prisma.ProductGetPayload<{
-  include: {
-    inventory: {
-      include: {
-        warehouse: true;
-      };
+// Manually define the product payload type to ensure compilation without Prisma import dependencies
+interface ProductWithInventory {
+  id: string;
+  name: string;
+  sku: string;
+  description: string | null;
+  inventory: {
+    warehouseId: string;
+    totalUnits: number;
+    reservedUnits: number;
+    warehouse: {
+      name: string;
+      location: string;
     };
-  };
-}>;
+  }[];
+}
 
 export async function GET() {
   try {
